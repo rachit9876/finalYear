@@ -1,0 +1,1048 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>fysearch</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  <style>
+    :root {
+      /* Dark Theme Colors */
+      --bg-primary: #0D0D0D;
+      --bg-secondary: #1A1A1A;
+      --bg-tertiary: #252525;
+      --bg-elevated: #2A2A2A;
+
+      /* Gold Accent */
+      --accent: #D4A853;
+      --accent-hover: #F0C060;
+      --accent-muted: rgba(212, 168, 83, 0.2);
+
+      /* Text Colors */
+      --text-primary: #FFFFFF;
+      --text-secondary: #A0A0A0;
+      --text-muted: #666666;
+
+      /* Borders & Shadows */
+      --border: #333333;
+      --border-light: #444444;
+
+      /* Status Colors */
+      --success: #4CAF50;
+      --success-bg: rgba(76, 175, 80, 0.15);
+      --error: #F44336;
+      --error-bg: rgba(244, 67, 54, 0.15);
+
+      /* Legacy mappings for compatibility */
+      --md-sys-color-primary: var(--accent);
+      --md-sys-color-on-primary: #000000;
+      --md-sys-color-background: var(--bg-primary);
+      --md-sys-color-on-background: var(--text-primary);
+      --md-sys-color-surface: var(--bg-secondary);
+      --md-sys-color-on-surface: var(--text-primary);
+      --md-sys-color-surface-variant: var(--bg-tertiary);
+      --md-sys-color-on-surface-variant: var(--text-secondary);
+      --md-sys-color-outline: var(--border);
+      --md-sys-color-outline-variant: var(--border-light);
+      --md-sys-color-error: var(--error);
+      --md-sys-color-error-container: var(--error-bg);
+      --md-sys-color-on-error-container: var(--error);
+      --md-sys-color-surface-container-lowest: var(--bg-primary);
+      --md-sys-color-surface-container-low: var(--bg-secondary);
+      --md-sys-color-surface-container: var(--bg-tertiary);
+      --md-sys-color-surface-container-high: var(--bg-elevated);
+      --md-sys-color-surface-container-highest: #353535;
+      --md-sys-color-primary-container: var(--accent-muted);
+      --md-sys-color-on-primary-container: var(--accent);
+      --md-sys-color-secondary-container: var(--bg-tertiary);
+      --md-sys-color-on-secondary-container: var(--text-secondary);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--md-sys-color-background);
+      color: var(--md-sys-color-on-background);
+      font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+      line-height: 1.5;
+    }
+
+    .material-icons {
+      font-family: 'Material Icons';
+      font-size: 24px;
+      vertical-align: middle;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--md-sys-color-surface);
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    .topbar-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--md-sys-color-primary-container);
+      color: var(--md-sys-color-on-primary-container);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    .brand-text .title {
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--md-sys-color-on-surface);
+      letter-spacing: 0;
+    }
+
+    .brand-text .subtitle {
+      font-size: 12px;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    .chips {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      font-size: 14px;
+      color: var(--md-sys-color-on-surface-variant);
+      background: var(--md-sys-color-surface-container-high);
+      padding: 6px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+    }
+
+    .chip.ready {
+      background: var(--success-bg);
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    .chip.missing {
+      background: var(--error-bg);
+      color: var(--error);
+      border-color: var(--error);
+    }
+
+    .app {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      gap: 24px;
+      align-items: start;
+    }
+
+    @media (max-width: 1200px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--md-sys-color-surface-container-low);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+
+    .card h2 {
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--md-sys-color-on-surface);
+      margin-bottom: 16px;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 64px 24px;
+      background: linear-gradient(180deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
+      border-radius: 0;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero-title {
+      font-size: 42px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .hero-subtitle {
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      gap: 8px;
+      background: var(--md-sys-color-surface-container-highest);
+      padding: 4px;
+      border-radius: 100px;
+    }
+
+    .tab {
+      padding: 10px 24px;
+      border-radius: 100px;
+      border: none;
+      background: transparent;
+      color: var(--md-sys-color-on-surface-variant);
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab[aria-selected="true"] {
+      background: var(--accent);
+      color: #000000;
+      box-shadow: 0 2px 8px rgba(212, 168, 83, 0.3);
+    }
+
+    .searchbar {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: 16px 20px;
+      border-radius: 28px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      background: var(--md-sys-color-surface);
+      color: var(--md-sys-color-on-surface);
+      font-size: 16px;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(212, 168, 83, 0.2);
+    }
+
+    label {
+      display: block;
+      margin-top: 16px;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 100px;
+      border: none;
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      color: #000000;
+      font-weight: 600;
+    }
+
+    .btn.primary:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 4px 12px rgba(212, 168, 83, 0.3);
+    }
+
+    .btn.secondary {
+      background: var(--md-sys-color-secondary-container);
+      color: var(--md-sys-color-on-secondary-container);
+    }
+
+    .btn.danger {
+      background: var(--md-sys-color-error-container);
+      color: var(--md-sys-color-on-error-container);
+    }
+
+    .banner {
+      padding: 16px 20px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .banner.error {
+      background: var(--md-sys-color-error-container);
+      color: var(--md-sys-color-on-error-container);
+    }
+
+    .banner.ok {
+      background: var(--success-bg);
+      color: var(--success);
+    }
+
+    .dropzone {
+      border: 2px dashed var(--border-light);
+      border-radius: 16px;
+      background: var(--bg-tertiary);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dropzone:hover {
+      border-color: var(--accent);
+      background: var(--accent-muted);
+    }
+
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-muted);
+      box-shadow: 0 0 0 4px rgba(212, 168, 83, 0.15);
+    }
+
+    .preview {
+      max-width: 320px;
+      max-height: 240px;
+      object-fit: contain;
+      border-radius: 12px;
+      margin: 16px auto;
+      display: none;
+    }
+
+    .feed {
+      display: grid;
+      gap: 16px;
+    }
+
+    .item {
+      display: flex;
+      gap: 16px;
+      padding: 16px;
+      background: var(--md-sys-color-surface-container-highest);
+      border-radius: 12px;
+      transition: all 0.2s;
+    }
+
+    .item:hover {
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .thumb {
+      width: 80px;
+      height: 80px;
+      object-fit: cover;
+      border-radius: 8px;
+      background: var(--md-sys-color-surface-container);
+      flex-shrink: 0;
+    }
+
+    .meta {
+      font-size: 14px;
+      color: var(--md-sys-color-on-surface-variant);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .meta strong {
+      color: var(--md-sys-color-on-surface);
+      font-weight: 500;
+    }
+
+    .path {
+      font-family: 'Roboto Mono', monospace;
+      font-size: 12px;
+      color: var(--md-sys-color-on-surface-variant);
+      word-break: break-all;
+    }
+
+    details {
+      margin-top: 16px;
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 12px;
+      padding: 16px;
+      background: var(--md-sys-color-surface-container-highest);
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--md-sys-color-on-surface);
+      list-style: none;
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .advanced {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 768px) {
+      .advanced {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .check {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 12px;
+      font-size: 14px;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+
+    .settings {
+      position: sticky;
+      top: 90px;
+      display: grid;
+      gap: 16px;
+    }
+
+    @media (max-width: 1200px) {
+      .settings {
+        position: static;
+      }
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    /* Loading Overlay */
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .loading-overlay.active {
+      display: flex;
+    }
+
+    .loading-card {
+      background: var(--bg-secondary);
+      border-radius: 24px;
+      padding: 32px 48px;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--border);
+    }
+
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .loading-bar {
+      width: 200px;
+      height: 4px;
+      background: var(--md-sys-color-surface-container-highest);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 16px;
+    }
+
+    .loading-bar-inner {
+      height: 100%;
+      width: 30%;
+      background: var(--md-sys-color-primary);
+      border-radius: 2px;
+      animation: loading-progress 1.5s ease-in-out infinite;
+    }
+
+    @keyframes loading-progress {
+      0% {
+        transform: translateX(-100%);
+      }
+
+      100% {
+        transform: translateX(400%);
+      }
+    }
+
+    .loading-text {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--md-sys-color-on-surface);
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <div class="loading-text" id="loadingText">Processing...</div>
+      <div class="loading-bar">
+        <div class="loading-bar-inner"></div>
+      </div>
+    </div>
+  </div>
+
+  {% set initial_mode = 'image' if image_results else ('text' if text_results else ('image' if last_uploaded_filename
+  else 'text')) %}
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-icon">FS</div>
+        <div class="brand-text">
+          <div class="title">fysearch</div>
+          <div class="subtitle">Multimodal forensic search</div>
+        </div>
+      </div>
+
+      <div class="chips">
+        <div class="chip {% if has_text_index %}ready{% else %}missing{% endif %}">
+          Text: {% if has_text_index %}✓{% else %}✗{% endif %}
+        </div>
+        <div class="chip {% if has_image_index %}ready{% else %}missing{% endif %}">
+          Image: {% if has_image_index %}✓{% else %}✗{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    {% if error %}
+    <div class="banner error">
+      <span class="material-icons">error</span>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if message %}
+    <div class="banner ok">
+      <span class="material-icons">check_circle</span>
+      {{ message }}
+    </div>
+    {% endif %}
+
+    <div class="layout">
+      <main class="stack">
+        <div class="hero">
+          <div class="hero-title">fysearch</div>
+          <div class="hero-subtitle">Local multimodal forensic search engine · Fully offline</div>
+
+          <div class="tabs" role="tablist">
+            <button class="tab" id="tab-text" type="button" role="tab"
+              aria-selected="{% if initial_mode == 'text' %}true{% else %}false{% endif %}">
+              <span class="material-icons" style="font-size: 18px;">text_fields</span>
+              Text Search
+            </button>
+            <button class="tab" id="tab-image" type="button" role="tab"
+              aria-selected="{% if initial_mode == 'image' %}true{% else %}false{% endif %}">
+              <span class="material-icons" style="font-size: 18px;">image</span>
+              Image Search
+            </button>
+          </div>
+        </div>
+
+        <div class="card" id="search">
+          <div id="panel-text" role="tabpanel" {% if initial_mode !='text' %}hidden{% endif %}>
+            <form method="post" action="/search/text">
+              <div class="searchbar">
+                <input id="query" name="query" type="text" value="{{ query }}" placeholder="Search for anything..."
+                  autocomplete="off" />
+                <button class="btn primary" type="submit">
+                  <span class="material-icons" style="font-size: 20px;">search</span>
+                  Search
+                </button>
+              </div>
+
+              <details>
+                <summary>Advanced Options</summary>
+                <div class="advanced">
+                  <div>
+                    <label>Search Mode</label>
+                    <select name="modality">
+                      <option value="auto" {% if modality=='auto' %}selected{% endif %}>Auto (Smart)</option>
+                      <option value="text" {% if modality=='text' %}selected{% endif %}>Text → Text</option>
+                      <option value="image" {% if modality=='image' %}selected{% endif %}>Text → Image</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Results</label>
+                    <input name="top_k" type="number" min="1" max="50" value="{{ top_k }}" />
+                  </div>
+                </div>
+              </details>
+            </form>
+          </div>
+
+          <div id="panel-image" role="tabpanel" {% if initial_mode !='image' %}hidden{% endif %}>
+            <form id="imageForm" method="post" action="/search/image" enctype="multipart/form-data">
+              <div class="dropzone" id="dropzone" tabindex="0">
+                <span class="material-icons"
+                  style="font-size: 48px; color: var(--md-sys-color-primary);">cloud_upload</span>
+                <div style="font-weight: 500; font-size: 18px; margin-top: 12px;">Drop an image here</div>
+                <div style="color: var(--md-sys-color-on-surface-variant); font-size: 14px; margin-top: 8px;">
+                  Or click to browse · Paste from clipboard
+                </div>
+                <img id="preview" class="preview" alt="preview" {% if last_uploaded_filename %}
+                  src="/upload/{{ last_uploaded_filename }}" style="display:block;" {% endif %} />
+                <div id="dzStatus"
+                  style="font-size: 14px; color: var(--md-sys-color-on-surface-variant); margin-top: 12px;">
+                  {% if last_uploaded_filename %}Last uploaded image loaded{% endif %}
+                </div>
+              </div>
+
+              <input class="sr-only" id="imageInput" name="image" type="file" accept="image/*" />
+
+              <details>
+                <summary>Advanced Options</summary>
+                <div class="advanced">
+                  <div>
+                    <label>Results</label>
+                    <input name="top_k" type="number" min="1" max="50" value="{{ top_k }}" />
+                  </div>
+                </div>
+              </details>
+
+              <button class="btn primary" type="submit" style="margin-top: 16px;">
+                <span class="material-icons" style="font-size: 20px;">search</span>
+                Search
+              </button>
+            </form>
+          </div>
+        </div>
+
+        {% if modality == 'auto' and text_results and image_results %}
+        <!-- Auto mode: Side-by-side results -->
+        <div class="results-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div class="card">
+            <div class="section-title">
+              <h2 style="color: var(--accent);">📄 Text Results</h2>
+              <span style="color: var(--md-sys-color-on-surface-variant); font-size: 14px;">{{ text_results|length }}
+                found</span>
+            </div>
+            <div class="feed">
+              {% for r in text_results %}
+              <div class="item">
+                <a href="/doc/{{ r.doc_id }}" target="_blank">
+                  {% if r.media_type != 'pdf' %}
+                  <img class="thumb" src="/doc/{{ r.doc_id }}" alt="result" />
+                  {% else %}
+                  <div class="thumb"
+                    style="display:flex; align-items:center; justify-content:center; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);">
+                    <span class="material-icons" style="font-size: 28px;">picture_as_pdf</span>
+                  </div>
+                  {% endif %}
+                </a>
+                <div class="meta">
+                  <div><strong>Score:</strong> {{ "%.4f"|format(r.score) }}</div>
+                  <div><strong>ID:</strong> <span class="path">{{ r.doc_id[:12] }}</span></div>
+                  {% if r.page %}
+                  <div><strong>Page:</strong> <span class="path">{{ r.page }}</span></div>
+                  {% endif %}
+                  {% if r.method %}
+                  <div><strong>Method:</strong> <span class="path">{{ r.method }}</span></div>
+                  {% endif %}
+                  <div class="path">{{ r.original_path }}</div>
+                  {% if r.snippet %}
+                  <div style="margin-top: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 14px;">
+                    {{ r.snippet }}
+                  </div>
+                  {% endif %}
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-title">
+              <h2 style="color: #64B5F6;">🖼️ Image Results</h2>
+              <span style="color: var(--md-sys-color-on-surface-variant); font-size: 14px;">{{ image_results|length }}
+                found</span>
+            </div>
+            <div class="feed">
+              {% for r in image_results %}
+              <div class="item">
+                <a href="/doc/{{ r.doc_id }}" target="_blank">
+                  <img class="thumb" src="/doc/{{ r.doc_id }}" alt="result" />
+                </a>
+                <div class="meta">
+                  <div><strong>Score:</strong> {{ "%.4f"|format(r.score) }}</div>
+                  <div><strong>ID:</strong> <span class="path">{{ r.doc_id[:12] }}</span></div>
+                  {% if r.page %}
+                  <div><strong>Page:</strong> <span class="path">{{ r.page }}</span></div>
+                  {% endif %}
+                  <div class="path">{{ r.original_path }}</div>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% else %}
+
+        {% if text_results %}
+        <div class="card">
+          <div class="section-title">
+            <h2>Text Results</h2>
+            <span style="color: var(--md-sys-color-on-surface-variant); font-size: 14px;">{{ text_results|length }}
+              found</span>
+          </div>
+          <div class="feed">
+            {% for r in text_results %}
+            <div class="item">
+              <a href="/doc/{{ r.doc_id }}" target="_blank">
+                {% if r.media_type != 'pdf' %}
+                <img class="thumb" src="/doc/{{ r.doc_id }}" alt="result" />
+                {% else %}
+                <div class="thumb"
+                  style="display:flex; align-items:center; justify-content:center; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);">
+                  <span class="material-icons" style="font-size: 28px;">picture_as_pdf</span>
+                </div>
+                {% endif %}
+              </a>
+              <div class="meta">
+                <div><strong>Score:</strong> {{ "%.4f"|format(r.score) }}</div>
+                <div><strong>ID:</strong> <span class="path">{{ r.doc_id[:12] }}</span></div>
+                {% if r.page %}
+                <div><strong>Page:</strong> <span class="path">{{ r.page }}</span></div>
+                {% endif %}
+                {% if r.method %}
+                <div><strong>Method:</strong> <span class="path">{{ r.method }}</span></div>
+                {% endif %}
+                <div class="path">{{ r.original_path }}</div>
+                {% if r.snippet %}
+                <div style="margin-top: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 14px;">
+                  {{ r.snippet }}
+                </div>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if image_results %}
+        <div class="card">
+          <div class="section-title">
+            <h2>Image Results</h2>
+            <span style="color: var(--md-sys-color-on-surface-variant); font-size: 14px;">{{ image_results|length }}
+              found</span>
+          </div>
+          <div class="feed">
+            {% for r in image_results %}
+            <div class="item">
+              <a href="/doc/{{ r.doc_id }}" target="_blank">
+                <img class="thumb" src="/doc/{{ r.doc_id }}" alt="result" />
+              </a>
+              <div class="meta">
+                <div><strong>Score:</strong> {{ "%.4f"|format(r.score) }}</div>
+                <div><strong>ID:</strong> <span class="path">{{ r.doc_id[:12] }}</span></div>
+                {% if r.page %}
+                <div><strong>Page:</strong> <span class="path">{{ r.page }}</span></div>
+                {% endif %}
+                <div class="path">{{ r.original_path }}</div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+        {% endif %}
+      </main>
+
+      <aside class="settings">
+        <div class="card">
+          <h2>Dataset</h2>
+          <details open>
+            <summary>Configure Folder</summary>
+            <form method="post" action="/dataset">
+              <label>Folder Path</label>
+              <input name="dataset_path" type="text" value="{{ dataset_path }}" placeholder="/path/to/files" />
+
+              <label class="check">
+                <input name="run_pipeline" type="checkbox" checked />
+                Run full pipeline
+              </label>
+
+              <button class="btn primary" type="submit" style="margin-top: 16px; width: 100%;">Apply</button>
+            </form>
+          </details>
+        </div>
+
+        <div class="card">
+          <div class="section-title">
+            <h2>History</h2>
+            <form method="post" action="/history/clear">
+              <button class="btn secondary" type="submit">Clear</button>
+            </form>
+          </div>
+
+          {% if history and history|length > 0 %}
+          <div class="feed">
+            {% for h in history %}
+            <div class="item" style="padding: 12px;">
+              <div
+                style="width: 8px; height: 8px; border-radius: 50%; background: var(--md-sys-color-primary); margin-top: 6px;">
+              </div>
+              <div class="meta">
+                <div><strong>{{ h.kind }}</strong></div>
+                {% if h.kind == 'text' %}
+                <div class="path">{{ h.query_text }}</div>
+                {% else %}
+                <div class="path">{{ h.uploaded_path }}</div>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div style="color: var(--md-sys-color-on-surface-variant); font-size: 14px;">No history yet</div>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h2>Reset</h2>
+          <form method="post" action="/reset">
+            <label class="check">
+              <input name="confirm" type="checkbox" />
+              Confirm deletion
+            </label>
+            <button class="btn danger" type="submit" style="margin-top: 16px; width: 100%;">Reset All Data</button>
+          </form>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const serverInitialMode = "{{ initial_mode }}";
+      const hasImageResults = {% if image_results %}true{% else %} false{% endif %};
+    const hasTextResults = {% if text_results %}true{% else %} false{% endif %};
+
+    const tabText = document.getElementById('tab-text');
+    const tabImage = document.getElementById('tab-image');
+    const panelText = document.getElementById('panel-text');
+    const panelImage = document.getElementById('panel-image');
+
+    const queryInput = document.getElementById('query');
+    const dropzone = document.getElementById('dropzone');
+    const imageInput = document.getElementById('imageInput');
+    const preview = document.getElementById('preview');
+    const statusEl = document.getElementById('dzStatus');
+
+    function setMode(mode) {
+      const isText = mode === 'text';
+      tabText.setAttribute('aria-selected', String(isText));
+      tabImage.setAttribute('aria-selected', String(!isText));
+      panelText.hidden = !isText;
+      panelImage.hidden = isText;
+      try { localStorage.setItem('fysearch.mode', mode); } catch (e) { }
+      if (isText && queryInput) {
+        setTimeout(() => queryInput.focus(), 0);
+      }
+    }
+
+    tabText?.addEventListener('click', () => setMode('text'));
+    tabImage?.addEventListener('click', () => setMode('image'));
+
+    let initial = serverInitialMode;
+    if (!hasImageResults && !hasTextResults) {
+      try {
+        const saved = localStorage.getItem('fysearch.mode');
+        if (saved === 'image' || saved === 'text') initial = saved;
+      } catch (e) { }
+    }
+    setMode(initial);
+
+    function setStatus(msg) {
+      if (!statusEl) return;
+      statusEl.textContent = msg || '';
+    }
+
+    function setPreviewFromFile(file) {
+      if (!preview) return;
+      if (!file) {
+        preview.style.display = 'none';
+        preview.src = '';
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      preview.src = url;
+      preview.style.display = 'block';
+    }
+
+    function setFileInput(file) {
+      if (!imageInput || !file) return;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      imageInput.files = dt.files;
+      setPreviewFromFile(file);
+      setStatus(`Ready: ${file.name} (${Math.round(file.size / 1024)} KB)`);
+    }
+
+    function wireDropzone() {
+      if (!dropzone || !imageInput) return;
+
+      dropzone.addEventListener('click', () => imageInput.click());
+
+      imageInput.addEventListener('change', () => {
+        const file = imageInput.files && imageInput.files[0];
+        if (file) setFileInput(file);
+      });
+
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+
+        const dt = e.dataTransfer;
+        const file = dt?.files && dt.files[0];
+        if (file) {
+          setFileInput(file);
+        }
+      });
+
+      dropzone.addEventListener('paste', (e) => {
+        const items = e.clipboardData?.items || [];
+        for (const it of items) {
+          if (it.type && it.type.startsWith('image/')) {
+            const file = it.getAsFile();
+            if (file) {
+              setFileInput(file);
+              e.preventDefault();
+              return;
+            }
+          }
+        }
+      });
+    }
+
+    wireDropzone();
+
+    // Loading overlay for form submissions
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const loadingText = document.getElementById('loadingText');
+
+    const loadingMessages = {
+      '/search/text': 'Searching...',
+      '/search/image': 'Analyzing image...',
+      '/dataset': 'Processing dataset...',
+      '/reset': 'Resetting data...',
+      '/history/clear': 'Clearing history...',
+    };
+
+    function showLoading(action) {
+      if (!loadingOverlay) return;
+      const msg = loadingMessages[action] || 'Processing...';
+      if (loadingText) loadingText.textContent = msg;
+      loadingOverlay.classList.add('active');
+    }
+
+    // Hook into all form submissions
+    document.querySelectorAll('form').forEach(form => {
+      form.addEventListener('submit', () => {
+        const action = form.getAttribute('action') || '';
+        showLoading(action);
+      });
+    });
+      }) ();
+  </script>
+</body>
+
+</html>

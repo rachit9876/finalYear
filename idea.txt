@@ -1,0 +1,276 @@
+# CPU-Optimized Multimodal Forensic Search Engine
+## Detailed End-to-End Project Flow (Offline, CPU-Only)
+
+---
+
+## 0. System Constraints (Foundation)
+
+- Runs fully offline
+- CPU-only (no GPU, no CUDA)
+- Limited RAM (~16 GB)
+- Linux-based system
+- No cloud APIs, no SaaS
+
+These constraints drive **every design decision** below.
+
+---
+
+## 1. Input Stage (Data Ingestion)
+
+### What the system accepts:
+- Images (.jpg, .png, .webp)
+- PDFs (text-based or scanned)
+- Scanned documents
+
+### What happens:
+- User drops files into an input folder
+- OR uploads via local UI
+- OR folder watcher detects new files automatically
+
+Each file is assigned:
+- Unique ID
+- File type
+- Timestamp
+- File size
+- Source path
+
+Nothing intelligent yet. This is pure plumbing.
+
+---
+
+## 2. Document Preprocessing Layer
+
+This stage **prepares data for ML**.
+
+### 2.1 If the file is a PDF:
+- Check if it contains selectable text
+  - If yes → extract text directly
+  - If no → treat pages as images
+
+### 2.2 If the file is an image:
+- Load image
+- Resize if needed (CPU optimization)
+- Convert to RGB
+
+---
+
+## 3. OCR (Text Extraction)
+
+### Purpose:
+Make **text searchable**, not to understand images.
+
+### Process:
+- OCR runs only on:
+  - scanned PDFs
+  - images containing text
+- Extracted text is stored as:
+  - raw text
+  - language detected
+  - OCR confidence score
+
+### Important:
+OCR output is **NOT required** for image similarity or text→image search.
+
+OCR only feeds the **text pipeline**.
+
+---
+
+## 4. Metadata Extraction
+
+For every file, store:
+- File type
+- Creation / modification time
+- Language (if text exists)
+- OCR confidence
+- Page count (PDF)
+- Image resolution
+
+Metadata is used later for **filtering**, not ML.
+
+---
+
+## 5. Text Embedding Pipeline
+
+### Input:
+- OCR text
+- Extracted PDF text
+- User-written notes (optional)
+
+### Steps:
+1. Clean text (remove noise)
+2. Chunk long documents
+3. Pass text through a **sentence embedding model**
+4. Output:
+   - 1 vector per chunk
+   - Fixed dimension (e.g., 384 or 512)
+
+### Result:
+Text → numerical vectors that represent **semantic meaning**, not keywords.
+
+---
+
+## 6. Image Embedding Pipeline
+
+### Input:
+- Images (including PDF pages treated as images)
+
+### Steps:
+1. Resize image (CPU-friendly)
+2. Normalize pixels
+3. Pass image through a **vision encoder**
+4. Output:
+   - 1 vector per image
+   - Same vector dimension as text embeddings
+
+### Result:
+Images → numerical vectors that represent **visual semantics**, not pixels.
+
+---
+
+## 7. Multimodal Fusion (THIS IS THE CONFUSING PART — READ CAREFULLY)
+
+### What fusion actually means:
+- Text vectors and image vectors are:
+  - normalized
+  - kept in the **same dimensional space**
+- No labels
+- No classification
+- No rules
+
+### Why this matters:
+Because now you can directly compare:
+- text ↔ text
+- image ↔ image
+- text ↔ image
+
+This enables:
+- Text → Image search
+- Image → Text search
+
+Nothing magical. Just math.
+
+---
+
+## 8. Vector Indexing (FAISS, CPU)
+
+### What gets indexed:
+- All text embeddings
+- All image embeddings
+- Each vector is linked to:
+  - file ID
+  - modality (text/image)
+  - metadata
+
+### Index type:
+- FAISS (CPU)
+- IVF or HNSW
+
+### Purpose:
+Fast nearest-neighbor search in high-dimensional space.
+
+---
+
+
+All optional. Core system works without them.
+
+---
+
+## 10. Search Flow (THIS IS WHAT USERS SEE)
+
+### 10.1 Text → Text Search
+User types:
+"invoice fraud"
+
+
+System:
+- Embed query text
+- Search text embeddings
+- Return documents
+
+---
+
+### 10.2 Image → Image Search
+User uploads an image.
+
+System:
+- Embed image
+- Search image embeddings
+- Return visually similar images
+
+---
+
+### 10.3 Text → Image Search (Your confusion point)
+
+User types:
+
+
+"big boobs"
+
+
+System:
+1. Convert text → vector
+2. Compare against **image vectors**
+3. Return nearest image vectors
+
+
+NO OCR required here.
+
+---
+
+### 10.4 Hybrid Search
+User:
+
+
+Text: "invoice"
+Filter: images only
+Date: last 6 months
+
+
+System:
+- Semantic similarity
+- Metadata filtering
+- Combined scoring
+
+---
+
+## 11. Ranking & Output
+
+Results are ranked by:
+- Vector similarity score
+- Optional modality weight
+- Optional metadata filters
+
+User sees:
+- File preview
+- Similarity score
+- Matched modality (text/image)
+
+
+---
+
+## 12. Evaluation & Metrics
+
+Measured values:
+- Query latency
+- Top-K relevance
+- OCR word error rate
+- Embedding throughput
+- Memory usage
+
+No fake “accuracy”.
+
+---
+
+## 13. Why ML Is Required (Final Understanding)
+
+- Keywords fail
+- Rules fail
+- Visual similarity is continuous
+- Meaning is contextual
+
+Therefore:
+> The problem is fundamentally continuous, not discrete.
+
+---
+
+## END OF FLOW

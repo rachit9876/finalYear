@@ -1,0 +1,8 @@
+{
+  "text_model": "sentence-transformers/clip-ViT-B-32",
+  "image_model": "sentence-transformers/clip-ViT-B-32",
+  "dataset_path": "",
+  "ocr_languages": "eng+hin",
+  "embedding_dim": 384,
+  "max_workers": 8
+}
