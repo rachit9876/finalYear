@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import shutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from .config import load_config
 from .db import Document, upsert_document
@@ -42,8 +42,9 @@ def _detect_media_type(path: Path) -> str:
 
 def _hash_file(path: Path) -> str:
     h = hashlib.sha256()
+    # Use 8MB read buffer for faster I/O on large files
     with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
@@ -69,10 +70,10 @@ def ingest_path(conn, src: Path, max_workers: Optional[int] = None) -> list[Inge
     src = src.resolve()
     paths.store_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine worker count from config or parameter
+    # Determine worker count from config
     if max_workers is None:
         cfg = load_config()
-        max_workers = cfg.max_workers
+        max_workers = cfg.effective_max_workers
 
     candidates: list[Path]
     if src.is_dir():
@@ -83,9 +84,9 @@ def ingest_path(conn, src: Path, max_workers: Optional[int] = None) -> list[Inge
     results: list[IngestResult] = []
     processed_files: list[tuple[str, Path, str, Path, bool]] = []
 
-    # Parallel file processing (hash + copy)
-    # Using ProcessPoolExecutor to bypass GIL for CPU-bound hashing
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    # ThreadPoolExecutor is better for I/O-bound work (file hashing + copy).
+    # Avoids the heavy process spawn overhead of ProcessPoolExecutor.
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_process_single_file, fp, paths.store_dir): fp for fp in candidates}
         for future in as_completed(futures):
             result = future.result()
@@ -107,5 +108,3 @@ def ingest_path(conn, src: Path, max_workers: Optional[int] = None) -> list[Inge
         results.append(IngestResult(doc_id=doc_id, stored_path=stored_path, media_type=media_type, is_new=is_new))
 
     return results
-
-

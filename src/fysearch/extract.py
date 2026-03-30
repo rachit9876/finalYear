@@ -84,7 +84,7 @@ def _render_pdf_pages_to_store(
     pdf_doc_id: str,
     stored_pdf_path: Path,
     original_pdf_path: str,
-    dpi: int = 150,
+    dpi: int = 200,
     max_threads: Optional[int] = None,
 ) -> list[tuple[str, Path]]:
     """Render a PDF into per-page JPEGs under data/store and upsert them as image documents.
@@ -99,10 +99,10 @@ def _render_pdf_pages_to_store(
     paths = get_paths()
     paths.store_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use config max_workers if not specified
+    # Use config effective_max_workers if not specified
     if max_threads is None:
         cfg = load_config()
-        max_threads = cfg.max_workers
+        max_threads = cfg.effective_max_workers
     threads = max(1, min(max_threads, (os.cpu_count() or 1)))
     rendered: list[tuple[str, Path]] = []
 

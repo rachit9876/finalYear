@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Protocol
+from typing import Protocol
 
 import numpy as np
 
@@ -24,24 +24,34 @@ class BruteForceIndex:
     def __init__(self, dim: int):
         self.dim = dim
         self._doc_ids: list[str] = []
-        self._vectors: list[np.ndarray] = []
+        self._matrix: np.ndarray | None = None  # Pre-stacked for fast search
 
     def add(self, doc_ids: list[str], vectors: np.ndarray) -> None:
         if vectors.ndim != 2 or vectors.shape[1] != self.dim:
             raise ValueError(f"Expected vectors shape (n,{self.dim}), got {vectors.shape}")
-        for doc_id, vec in zip(doc_ids, vectors, strict=True):
-            self._doc_ids.append(doc_id)
-            self._vectors.append(vec.astype(np.float32, copy=False))
+        # Pre-stack the matrix so we don't re-stack on every search call
+        mat = vectors.astype(np.float32, copy=False)
+        if self._matrix is not None:
+            self._matrix = np.vstack([self._matrix, mat])
+        else:
+            self._matrix = mat.copy()
+        self._doc_ids.extend(doc_ids)
 
     def search(self, query: np.ndarray, top_k: int) -> list[SearchHit]:
         if query.shape != (self.dim,):
             raise ValueError(f"Expected query shape ({self.dim},), got {query.shape}")
-        if not self._vectors:
+        if self._matrix is None or len(self._doc_ids) == 0:
             return []
-        mat = np.stack(self._vectors, axis=0)
-        # Cosine similarity (assumes vectors are already normalized)
-        scores = mat @ query.astype(np.float32, copy=False)
-        idx = np.argsort(-scores)[:top_k]
+        # Cosine similarity via dot product (assumes vectors are already L2-normalized)
+        scores = self._matrix @ query.astype(np.float32, copy=False)
+        # Use argpartition for faster top-k selection on large arrays
+        k = min(top_k, len(scores))
+        if k >= len(scores):
+            idx = np.argsort(-scores)[:k]
+        else:
+            # argpartition is O(n) vs argsort O(n log n)
+            top_indices = np.argpartition(-scores, k)[:k]
+            idx = top_indices[np.argsort(-scores[top_indices])]
         return [SearchHit(doc_id=self._doc_ids[i], score=float(scores[i])) for i in idx]
 
 

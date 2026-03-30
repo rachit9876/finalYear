@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,19 @@ class Config:
     ocr_languages: str = "eng"
 
     # Embedding vector size (used for index creation; must match model output).
+    # CLIP ViT-B/32 produces 512-dimensional vectors.
     embedding_dim: int = 512
 
-    # Maximum number of parallel workers for CPU-intensive tasks (ingestion, extraction, embedding).
-    max_workers: int = 8
+    # Maximum number of parallel workers for CPU-intensive tasks.
+    # 0 = auto-detect from os.cpu_count() (recommended).
+    max_workers: int = 0
+
+    @property
+    def effective_max_workers(self) -> int:
+        """Resolved worker count: if 0, auto-detect from CPU count."""
+        if self.max_workers > 0:
+            return self.max_workers
+        return os.cpu_count() or 4
 
 
 def load_config() -> Config:
@@ -33,7 +43,10 @@ def load_config() -> Config:
     if not paths.config_path.exists():
         return Config()
     data = json.loads(paths.config_path.read_text(encoding="utf-8"))
-    return Config(**data)
+    # Filter out keys that don't exist in Config to prevent errors on old configs
+    valid_keys = {f.name for f in Config.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in data.items() if k in valid_keys}
+    return Config(**filtered)
 
 
 def save_config(config: Config) -> None:
@@ -48,4 +61,5 @@ def config_to_table(config: Config) -> list[tuple[str, Any]]:
         ("dataset_path", config.dataset_path),
         ("ocr_languages", config.ocr_languages),
         ("embedding_dim", config.embedding_dim),
+        ("max_workers", f"{config.max_workers} (effective: {config.effective_max_workers})"),
     ]

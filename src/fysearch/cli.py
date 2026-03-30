@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import multiprocessing
+import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
 import typer
@@ -18,6 +20,18 @@ from .ingest import ingest_path
 from .paths import get_paths
 from .vector_index import BruteForceIndex, FaissIndex
 
+# ---------------------------------------------------------------------------
+# Ensure proper multiprocessing start method on Linux/WSL.
+# "fork" is fastest and avoids re-importing heavy modules in each worker.
+# On macOS 3.13+, default changed to "spawn" which is slower and can
+# cause pickling issues with module-level state.
+# ---------------------------------------------------------------------------
+try:
+    if sys.platform != "win32":
+        multiprocessing.set_start_method("fork", force=False)
+except RuntimeError:
+    pass  # Already set — ignore
+
 app = typer.Typer(add_completion=False)
 console = Console()
 
@@ -27,7 +41,7 @@ def _extract_worker(row_tuple: tuple) -> bool:
     doc_id, stored_path_str, media_type, db_path_str = row_tuple
     stored_path = Path(stored_path_str)
     db_path = Path(db_path_str)
-    
+
     # Open a fresh connection for this worker
     conn = connect(db_path)
     try:
@@ -63,6 +77,7 @@ def config(
     dataset_path: str = typer.Option("", help="Dataset folder path (optional)"),
     ocr_languages: str = typer.Option("", help="Tesseract OCR languages, e.g. eng, hin, eng+hin"),
     embedding_dim: int = typer.Option(0, help="Embedding dimension"),
+    max_workers: int = typer.Option(0, help="Max parallel workers (0 = auto-detect from CPU count)"),
 ) -> None:
     """View/update config (`fysearch.config.json`)."""
     cfg = load_config()
@@ -82,6 +97,9 @@ def config(
         changed = True
     if embedding_dim:
         cfg.embedding_dim = embedding_dim
+        changed = True
+    if max_workers:
+        cfg.max_workers = max_workers
         changed = True
 
     if changed:
@@ -120,10 +138,13 @@ def ingest(path: Path = typer.Argument(..., exists=True)) -> None:
 @app.command()
 def extract() -> None:
     """Extract text from all ingested documents (PDF text + optional OCR)."""
+    paths = get_paths()
     conn = connect()
     init_db(conn)
 
     docs = list(list_documents(conn))
+    conn.close()  # Close main connection — workers will open their own
+
     count = 0
 
     with Progress(
@@ -134,22 +155,20 @@ def extract() -> None:
         console=console,
     ) as progress:
         task = progress.add_task("Extracting text...", total=len(docs))
-        
-        # Prepare arguments for workers
-        # (doc_id, stored_path, media_type)
+
+        # Prepare arguments for workers — include db_path as the 4th element
         work_items = [
-            (row["doc_id"], str(row["stored_path"]), row["media_type"])
+            (row["doc_id"], str(row["stored_path"]), row["media_type"], str(paths.db_path))
             for row in docs
         ]
-        
-        # Use ProcessPoolExecutor for parallel extraction (OCR is CPU heavy, PDF parsing too)
-        # We can default to os.cpu_count() or config.max_workers
+
+        # Use ProcessPoolExecutor for parallel extraction (OCR is CPU heavy)
         cfg = load_config()
-        max_workers = cfg.max_workers or None
-        
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        max_w = cfg.effective_max_workers
+
+        with ProcessPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(_extract_worker, item) for item in work_items]
-            
+
             for future in as_completed(futures):
                 try:
                     if future.result():
@@ -161,7 +180,6 @@ def extract() -> None:
                     progress.advance(task)
 
     console.print(f"Extracted text for {count} documents")
-    conn.close()
 
 
 def _get_index(dim: int, prefer_faiss: bool) -> object:
@@ -220,18 +238,17 @@ def build_index(
 
         doc_ids: list[str] = []
         vectors: list[np.ndarray] = []
-        
+
         # Filter rows with valid text
         valid_rows = []
         for r in rows:
             text = (r["text"] or "").strip()
             if text:
                 valid_rows.append(r)
-                
-        # Batch processing
-        batch_size = 32
-        total_batches = (len(valid_rows) + batch_size - 1) // batch_size
-        
+
+        # Batch processing — larger batches for better CPU utilization
+        batch_size = 64
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -240,18 +257,18 @@ def build_index(
             console=console,
         ) as progress:
             task = progress.add_task("Embedding text...", total=len(valid_rows))
-            
+
             for i in range(0, len(valid_rows), batch_size):
                 batch_rows = valid_rows[i : i + batch_size]
                 batch_texts = [(r["text"] or "").strip() for r in batch_rows]
-                
+
                 # Embed batch
                 batch_vecs = embedder.embed_batch(batch_texts, batch_size=len(batch_texts))
-                
+
                 for r, vec in zip(batch_rows, batch_vecs):
                     doc_ids.append(r["doc_id"])
                     vectors.append(vec)
-                
+
                 progress.advance(task, advance=len(batch_rows))
 
         if not vectors:
@@ -266,7 +283,7 @@ def build_index(
 
         paths = get_paths()
         out_path = paths.index_dir / "text_index.npz"
-        paths.index_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+        paths.index_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(out_path, doc_ids=np.asarray(doc_ids), vectors=mat)
         console.print(f"Wrote index: {out_path}")
         return
@@ -287,7 +304,7 @@ def build_index(
     doc_ids: list[str] = []
     vectors: list[np.ndarray] = []
 
-    rows = list(rows) # Ensure it's a list for len()
+    rows = list(rows)
     batch_size = 32
 
     with Progress(
@@ -298,20 +315,20 @@ def build_index(
         console=console,
     ) as progress:
         task = progress.add_task("Embedding images...", total=len(rows))
-        
+
         for i in range(0, len(rows), batch_size):
             batch_rows = rows[i : i + batch_size]
             batch_paths = [r["stored_path"] for r in batch_rows]
-            
+
             try:
                 batch_vecs = embedder.embed_batch(batch_paths, batch_size=len(batch_paths))
-                
+
                 for r, vec in zip(batch_rows, batch_vecs):
                     doc_ids.append(r["doc_id"])
                     vectors.append(vec)
             except Exception as e:
                 console.print(f"[red]Error embedding batch {i}:[/red] {e}")
-                
+
             progress.advance(task, advance=len(batch_rows))
 
     if not vectors:
@@ -325,7 +342,7 @@ def build_index(
 
     paths = get_paths()
     out_path = paths.index_dir / "image_index.npz"
-    paths.index_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+    paths.index_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out_path, doc_ids=np.asarray(doc_ids), vectors=mat)
     console.print(f"Wrote index: {out_path}")
 
@@ -404,26 +421,6 @@ def search_text(
     conn.close()
 
 
-@app.command()
-def web(
-    host: str = typer.Option("127.0.0.1", help="Bind host"),
-    port: int = typer.Option(5000, help="Bind port"),
-    debug: bool = typer.Option(False, help="Enable Flask debug mode"),
-) -> None:
-    """Run a local Flask UI to view/search results."""
-    try:
-        from .webapp import create_app
-    except Exception as e:
-        raise typer.BadParameter(str(e))
-
-    app_ = create_app()
-    app_.run(host=host, port=port, debug=debug)
-
-
-if __name__ == "__main__":
-    app()
-
-
 @app.command(name="search-image")
 def search_image(
     image: Path = typer.Argument(..., exists=True),
@@ -467,3 +464,27 @@ def search_image(
 
     console.print(table)
     conn.close()
+
+
+@app.command()
+def web(
+    host: str = typer.Option("0.0.0.0", help="Bind host (0.0.0.0 for WSL access from Windows)"),
+    port: int = typer.Option(5000, help="Bind port"),
+    debug: bool = typer.Option(False, help="Enable Flask debug mode"),
+) -> None:
+    """Run a local Flask UI to view/search results."""
+    try:
+        from .webapp import create_app
+    except Exception as e:
+        raise typer.BadParameter(str(e))
+
+    console.print(f"[bold green]Starting FYSearch web UI[/bold green]")
+    console.print(f"  → http://{host}:{port}")
+    if host == "0.0.0.0":
+        console.print(f"  → http://127.0.0.1:{port}  (localhost)")
+    app_ = create_app()
+    app_.run(host=host, port=port, debug=debug)
+
+
+if __name__ == "__main__":
+    app()

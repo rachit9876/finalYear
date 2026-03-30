@@ -1,7 +1,41 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def is_wsl() -> bool:
+    """Detect if running under Windows Subsystem for Linux."""
+    if sys.platform != "linux":
+        return False
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except (OSError, IOError):
+        return False
+
+
+def normalize_path(p: str) -> str:
+    """Convert Windows paths to WSL-compatible paths when running under WSL.
+    
+    Handles:
+      - C:\\Users\\... → /mnt/c/Users/...
+      - C:/Users/...  → /mnt/c/Users/...
+      - /mnt/c/...    → unchanged (already WSL format)
+      - /home/...     → unchanged (native Linux path)
+    """
+    p = p.strip()
+    if not p:
+        return p
+
+    if is_wsl() and len(p) >= 3 and p[1] == ':' and p[2] in ('\\', '/'):
+        drive = p[0].lower()
+        rest = p[3:].replace('\\', '/')
+        return f"/mnt/{drive}/{rest}"
+
+    return p
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from .db import add_search_history, clear_search_history, connect, init_db, list
 from .embeddings import maybe_image_embedder, maybe_text_embedder
 from .extract import extract_text_for_doc
 from .ingest import ingest_path
-from .paths import get_paths
+from .paths import get_paths, normalize_path
 from .vector_index import BruteForceIndex, FaissIndex
 
 
@@ -502,18 +502,8 @@ def create_app():
             return redirect(url_for("index"))
 
         try:
-            # Convert Windows path to WSL path if needed (C:\ -> /mnt/c/)
-            import os
-            import platform
-            
-            # Check if we're in WSL
-            is_wsl = 'microsoft' in platform.uname().release.lower()
-            
-            if is_wsl and ':' in dataset_path and (dataset_path[1:3] == ':\\' or dataset_path[1:3] == ':/'):
-                # Convert Windows path to WSL path: C:\Users\... -> /mnt/c/Users/...
-                drive = dataset_path[0].lower()
-                path_part = dataset_path[3:].replace('\\', '/')
-                dataset_path = f'/mnt/{drive}/{path_part}'
+            # Automatically convert Windows paths to WSL paths when running under WSL
+            dataset_path = normalize_path(dataset_path)
             
             p = Path(dataset_path).expanduser()
             
