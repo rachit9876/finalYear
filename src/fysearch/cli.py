@@ -266,6 +266,7 @@ def build_index(
 
         paths = get_paths()
         out_path = paths.index_dir / "text_index.npz"
+        paths.index_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
         np.savez_compressed(out_path, doc_ids=np.asarray(doc_ids), vectors=mat)
         console.print(f"Wrote index: {out_path}")
         return
@@ -324,6 +325,7 @@ def build_index(
 
     paths = get_paths()
     out_path = paths.index_dir / "image_index.npz"
+    paths.index_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
     np.savez_compressed(out_path, doc_ids=np.asarray(doc_ids), vectors=mat)
     console.print(f"Wrote index: {out_path}")
 

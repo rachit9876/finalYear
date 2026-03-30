@@ -848,16 +848,44 @@
             <summary>Configure Folder</summary>
             <form method="post" action="/dataset">
               <label>Folder Path</label>
-              <input name="dataset_path" type="text" value="{{ dataset_path }}" placeholder="/path/to/files" />
+              <input name="dataset_path" type="text" value="{{ dataset_path }}" placeholder="C:\Users\username\Pictures (Windows) or /mnt/c/Users/username/Pictures (WSL)" />
 
               <label class="check">
                 <input name="run_pipeline" type="checkbox" checked />
-                Run full pipeline
+                Run full pipeline (ingest + extract)
               </label>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                ⏱️ Estimate: ~1-2 seconds per file
+              </div>
 
               <button class="btn primary" type="submit" style="margin-top: 16px; width: 100%;">Apply</button>
             </form>
           </details>
+        </div>
+
+        <div class="card">
+          <h2>Build Indexes</h2>
+          <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px;">Build search indexes after ingesting files</p>
+          <form method="post" action="/build-index" style="margin-bottom: 12px;">
+            <input type="hidden" name="modality" value="image" />
+            <button class="btn primary" type="submit" style="width: 100%;">
+              <span class="material-icons" style="font-size: 18px;">image</span>
+              Build Image Index
+            </button>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px; text-align: center;">
+              ⏱️ ~4 seconds per image
+            </div>
+          </form>
+          <form method="post" action="/build-index">
+            <input type="hidden" name="modality" value="text" />
+            <button class="btn primary" type="submit" style="width: 100%;">
+              <span class="material-icons" style="font-size: 18px;">text_fields</span>
+              Build Text Index
+            </button>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px; text-align: center;">
+              ⏱️ ~2 seconds per document
+            </div>
+          </form>
         </div>
 
         <div class="card">

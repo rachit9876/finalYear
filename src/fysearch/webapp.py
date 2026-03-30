@@ -469,6 +469,27 @@ def create_app():
         flash("Reset complete. Local store/index/DB/uploads cleared.", "success")
         return redirect(url_for("index"))
 
+    @app.post("/build-index")
+    def build_index_route():
+        modality = (request.form.get("modality") or "image").strip().lower()
+        prefer_faiss = True
+
+        if modality not in {"text", "image"}:
+            flash("Invalid modality. Choose text or image.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            if modality == "image":
+                _build_image_index(prefer_faiss=prefer_faiss)
+                flash("Image index built successfully!", "success")
+            else:
+                _build_text_index(prefer_faiss=prefer_faiss)
+                flash("Text index built successfully!", "success")
+        except Exception as e:
+            flash(f"Failed to build {modality} index: {str(e)}", "error")
+
+        return redirect(url_for("index"))
+
     @app.post("/dataset")
     def set_dataset():
         cfg = load_config()
@@ -480,9 +501,33 @@ def create_app():
             flash("Dataset folder path is empty", "error")
             return redirect(url_for("index"))
 
-        p = Path(dataset_path).expanduser().resolve()
-        if not p.exists() or not p.is_dir():
-            flash(f"Folder does not exist: {p}", "error")
+        try:
+            # Convert Windows path to WSL path if needed (C:\ -> /mnt/c/)
+            import os
+            import platform
+            
+            # Check if we're in WSL
+            is_wsl = 'microsoft' in platform.uname().release.lower()
+            
+            if is_wsl and ':' in dataset_path and (dataset_path[1:3] == ':\\' or dataset_path[1:3] == ':/'):
+                # Convert Windows path to WSL path: C:\Users\... -> /mnt/c/Users/...
+                drive = dataset_path[0].lower()
+                path_part = dataset_path[3:].replace('\\', '/')
+                dataset_path = f'/mnt/{drive}/{path_part}'
+            
+            p = Path(dataset_path).expanduser()
+            
+            if not p.exists():
+                flash(f"Folder does not exist: {dataset_path}", "error")
+                return redirect(url_for("index"))
+            if not p.is_dir():
+                flash(f"Path is not a directory: {dataset_path}", "error")
+                return redirect(url_for("index"))
+            
+            # Resolve after validation
+            p = p.resolve()
+        except Exception as e:
+            flash(f"Invalid path: {dataset_path} - {str(e)}", "error")
             return redirect(url_for("index"))
 
         # Save to config
@@ -506,20 +551,24 @@ def create_app():
                 conn.close()
 
                 built = []
+                errors = []
                 # Build image index if configured
                 try:
                     _build_image_index(prefer_faiss=prefer_faiss)
                     built.append("image")
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors.append(f"Image index failed: {str(e)}")
                 # Build text index if possible
                 try:
                     _build_text_index(prefer_faiss=prefer_faiss)
                     built.append("text")
-                except Exception:
-                    pass
+                except Exception as e:
+                    errors.append(f"Text index failed: {str(e)}")
 
-                flash(f"Scanned {len(ingest_results)} files ({new_files} new, {existing_files} already indexed), extracted {extracted} docs, built: {', '.join(built) or 'none'}", "success")
+                msg = f"Scanned {len(ingest_results)} files ({new_files} new, {existing_files} already indexed), extracted {extracted} docs, built: {', '.join(built) or 'none'}"
+                if errors:
+                    msg += f" | Errors: {'; '.join(errors)}"
+                flash(msg, "success" if built else "error")
             except Exception as e:
                 flash(str(e), "error")
         else:
