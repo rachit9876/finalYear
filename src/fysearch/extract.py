@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,16 @@ def ocr_image(image_path: Path, *, languages: Optional[str] = None) -> tuple[str
     langs = (languages or "").strip() or _get_ocr_languages()
     text = pytesseract.image_to_string(img, lang=langs)
     return text.strip(), None, None
+
+
+def _ocr_single_page(args: tuple[str, Path]) -> tuple[str, str, Optional[float], Optional[str]]:
+    """Worker function for parallel OCR. Returns (page_doc_id, text, conf, lang)."""
+    page_doc_id, page_img_path = args
+    try:
+        text, conf, lang = ocr_image(page_img_path)
+        return (page_doc_id, text, conf, lang)
+    except Exception:
+        return (page_doc_id, "", None, None)
 
 
 def _derive_page_doc_id(pdf_doc_id: str, page_number: int) -> str:
@@ -206,19 +217,29 @@ def extract_text_for_doc(conn, doc_id: str, stored_path: Path, media_type: str) 
                 upsert_extracted_text(conn, doc_id, combined, method="pdf_text", confidence=None, language=None, created_at=_now_iso())
                 changed = True
             else:
-                # If no selectable text, attempt OCR on missing per-page docs.
+                # If no selectable text, attempt OCR on missing per-page docs in parallel.
                 ocr_parts: list[str] = []
+                pages_to_ocr: list[tuple[str, Path]] = []
+                
                 for page_doc_id, page_img_path in rendered_pages:
                     page_existing = get_extracted_text(conn, page_doc_id)
                     page_has_text = bool(str(page_existing["text"] or "").strip()) if page_existing is not None else False
                     if page_existing is None or not page_has_text:
-                        try:
-                            page_text, conf, lang = ocr_image(page_img_path)
-                        except Exception:
-                            page_text, conf, lang = "", None, None
-                        upsert_extracted_text(conn, page_doc_id, page_text, method="ocr", confidence=conf, language=lang, created_at=_now_iso())
-                        changed = True
-
+                        pages_to_ocr.append((page_doc_id, page_img_path))
+                
+                # Parallel OCR processing - use all logical processors
+                if pages_to_ocr:
+                    cfg = load_config()
+                    max_w = cfg.effective_max_workers  # Will be 8 on your system
+                    with ThreadPoolExecutor(max_workers=max_w) as executor:
+                        futures = [executor.submit(_ocr_single_page, args) for args in pages_to_ocr]
+                        for future in as_completed(futures):
+                            page_doc_id, page_text, conf, lang = future.result()
+                            upsert_extracted_text(conn, page_doc_id, page_text, method="ocr", confidence=conf, language=lang, created_at=_now_iso())
+                            changed = True
+                
+                # Collect all OCR'd text
+                for page_doc_id, _ in rendered_pages:
                     page_row = get_extracted_text(conn, page_doc_id)
                     if page_row is not None:
                         t = str(page_row["text"] or "").strip()

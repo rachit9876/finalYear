@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -50,7 +48,6 @@ def _make_snippet(text: str, query: str, max_len: int = 220) -> str:
     if not q:
         return (text[:max_len] + ("…" if len(text) > max_len else "")).strip()
 
-    # Try to anchor around the first matching token.
     tokens = [t for t in q.replace("\n", " ").split() if len(t) >= 3]
     hay = text.lower()
     idx = -1
@@ -108,11 +105,8 @@ def _build_text_index(prefer_faiss: bool) -> Path:
         WHERE t.text IS NOT NULL
           AND length(trim(t.text)) > 0
           AND (
-            -- Include per-page docs (they have #page= in original_path)
             d.original_path LIKE '%#page=%'
-            -- Include non-PDF docs
             OR d.media_type NOT IN ('pdf', 'image')
-            -- Include PDFs without per-page docs
             OR (
                 d.media_type = 'pdf'
                 AND NOT EXISTS (
@@ -126,7 +120,6 @@ def _build_text_index(prefer_faiss: bool) -> Path:
     ).fetchall()
     conn.close()
 
-    # Prepare data for batch embedding
     doc_ids: list[str] = []
     texts: list[str] = []
     for r in rows:
@@ -138,8 +131,7 @@ def _build_text_index(prefer_faiss: bool) -> Path:
     if not texts:
         raise RuntimeError("No extracted text available to index. Enable OCR or ingest PDFs with selectable text.")
 
-    # Batch embedding - much faster than one-by-one or threading
-    mat = embedder.embed_batch(texts, batch_size=32)
+    mat = embedder.embed_batch(texts, batch_size=256)
 
     paths = get_paths()
     out = paths.index_dir / "text_index.npz"
@@ -170,8 +162,7 @@ def _build_image_index(prefer_faiss: bool) -> Path:
     doc_ids = [r["doc_id"] for r in rows]
     image_paths = [r["stored_path"] for r in rows]
 
-    # Batch embedding - much faster than one-by-one or threading
-    mat = embedder.embed_batch(image_paths, batch_size=16)
+    mat = embedder.embed_batch(image_paths, batch_size=128)
 
     paths = get_paths()
     out = paths.index_dir / "image_index.npz"
@@ -192,16 +183,12 @@ def text_query(query: str, target_modality: str, top_k: int, prefer_faiss: bool)
     idx.add(doc_ids, vectors)
 
     q = text_embedder.embed(query).astype(np.float32)
-    # Fetch more results for re-ranking with keyword boost
-    hits = idx.search(q, min(top_k * 3, len(doc_ids)))
+    hits = idx.search(q, top_k)
 
     conn = connect()
     init_db(conn)
 
-    # Extract query keywords for boosting (lowercase, strip punctuation)
-    query_keywords = [w.lower().strip("?!.,;:\"'") for w in query.split() if len(w) > 2]
-
-    results: list[tuple[float, ResultRow]] = []
+    results: list[ResultRow] = []
     for hit in hits:
         row = conn.execute(
             """
@@ -217,14 +204,9 @@ def text_query(query: str, target_modality: str, top_k: int, prefer_faiss: bool)
 
         original_path = str(row["original_path"])
         text = str(row["text"] or "")
-        text_lower = text.lower()
-        
-        # Calculate keyword boost: +0.5 for each query keyword found in text
-        keyword_boost = sum(0.5 for kw in query_keywords if kw in text_lower)
-        boosted_score = hit.score + keyword_boost
-        
-        result = ResultRow(
-            score=boosted_score,
+
+        results.append(ResultRow(
+            score=hit.score,
             doc_id=hit.doc_id,
             stored_path=str(row["stored_path"]),
             original_path=original_path,
@@ -232,33 +214,27 @@ def text_query(query: str, target_modality: str, top_k: int, prefer_faiss: bool)
             method=str(row["method"] or ""),
             snippet=_make_snippet(text, query=query),
             page=_page_from_original_path(original_path),
-        )
-        results.append((boosted_score, result))
+        ))
 
     conn.close()
-    
-    # Sort by boosted score (highest first) and return top_k
-    results.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in results[:top_k]]
+    return results
 
 
 def auto_query(query: str, top_k: int, prefer_faiss: bool) -> tuple[list[ResultRow], list[ResultRow]]:
-    """Smart auto search: returns separate text and image results for side-by-side display."""
+    """Smart auto search: returns separate text and image results."""
     text_results: list[ResultRow] = []
     image_results: list[ResultRow] = []
-    
-    # Try text search
+
     try:
         text_results = text_query(query=query, target_modality="text", top_k=top_k, prefer_faiss=prefer_faiss)
     except (FileNotFoundError, RuntimeError):
-        pass  # Text index might not exist
-    
-    # Try image search
+        pass
+
     try:
         image_results = text_query(query=query, target_modality="image", top_k=top_k, prefer_faiss=prefer_faiss)
     except (FileNotFoundError, RuntimeError):
-        pass  # Image index might not exist
-    
+        pass
+
     return (text_results, image_results)
 
 
@@ -315,6 +291,8 @@ def create_app():
     app = Flask(__name__)
     app.secret_key = 'fysearch-dev-key-change-in-production'
 
+    # ── Helpers ──────────────────────────────────────────────────────────
+
     def _last_uploaded_filename_from_history(history: list[dict[str, str]]) -> Optional[str]:
         for h in history:
             if (h.get("kind") or "").lower() != "image":
@@ -327,53 +305,6 @@ def create_app():
                 continue
             return name
         return None
-
-    @app.get("/upload/<name>")
-    def serve_upload(name: str):
-        # Serve uploaded query images from data/uploads only.
-        if not name or Path(name).name != name:
-            abort(404)
-        paths = get_paths()
-        uploads_root = (paths.data_dir / "uploads").resolve()
-        fp = (uploads_root / name).resolve()
-        if uploads_root not in fp.parents or not fp.exists() or not fp.is_file():
-            abort(404)
-        return send_file(fp)
-
-    def _reset_all_data() -> None:
-        """Wipe local data so the project starts fresh."""
-        paths = get_paths()
-
-        # Stop serving stale paths by clearing config dataset_path.
-        cfg = load_config()
-        if getattr(cfg, "dataset_path", ""):
-            cfg.dataset_path = ""
-            from .config import save_config
-
-            save_config(cfg)
-
-        # Remove derived data
-        for folder in [paths.store_dir, paths.index_dir, paths.data_dir / "uploads"]:
-            if folder.exists():
-                shutil.rmtree(folder, ignore_errors=True)
-
-        # Remove DB file
-        if paths.db_path.exists():
-            try:
-                paths.db_path.unlink()
-            except Exception:
-                pass
-
-        # Recreate base folders
-        paths.store_dir.mkdir(parents=True, exist_ok=True)
-        paths.index_dir.mkdir(parents=True, exist_ok=True)
-        (paths.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
-        paths.db_dir.mkdir(parents=True, exist_ok=True)
-
-        # Re-init empty DB
-        conn = connect()
-        init_db(conn)
-        conn.close()
 
     def _index_status() -> dict[str, bool]:
         paths = get_paths()
@@ -401,17 +332,82 @@ def create_app():
             )
         return out
 
-    @app.get("/")
-    def index():
-        # Clear history on every page load for a fresh start
-        conn = connect()
-        init_db(conn)
-        clear_search_history(conn)
-        conn.close()
-        
+    def _render(
+        *,
+        text_results=None,
+        image_results=None,
+        error=None,
+        message=None,
+        query="",
+        top_k=1,
+        modality="auto",
+        search_kind="",
+        last_uploaded_filename=None,
+    ):
+        """Single render helper — eliminates 6+ duplicate render_template calls."""
         cfg = load_config()
         history = _get_history()
-        # Check for flash messages from POST redirects
+        return render_template(
+            "index.html",
+            text_results=text_results or None,
+            image_results=image_results or None,
+            error=error,
+            message=message,
+            query=query,
+            top_k=top_k,
+            modality=modality,
+            search_kind=search_kind,
+            dataset_path=cfg.dataset_path,
+            history=history,
+            last_uploaded_filename=last_uploaded_filename,
+            **_index_status(),
+        )
+
+    # ── Routes ───────────────────────────────────────────────────────────
+
+    @app.get("/upload/<name>")
+    def serve_upload(name: str):
+        if not name or Path(name).name != name:
+            abort(404)
+        paths = get_paths()
+        uploads_root = (paths.data_dir / "uploads").resolve()
+        fp = (uploads_root / name).resolve()
+        if uploads_root not in fp.parents or not fp.exists() or not fp.is_file():
+            abort(404)
+        return send_file(fp)
+
+    def _reset_all_data() -> None:
+        paths = get_paths()
+
+        cfg = load_config()
+        if getattr(cfg, "dataset_path", ""):
+            cfg.dataset_path = ""
+            from .config import save_config
+            save_config(cfg)
+
+        for folder in [paths.store_dir, paths.index_dir, paths.data_dir / "uploads"]:
+            if folder.exists():
+                shutil.rmtree(folder, ignore_errors=True)
+
+        if paths.db_path.exists():
+            try:
+                paths.db_path.unlink()
+            except Exception:
+                pass
+
+        paths.store_dir.mkdir(parents=True, exist_ok=True)
+        paths.index_dir.mkdir(parents=True, exist_ok=True)
+        (paths.data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+        paths.db_dir.mkdir(parents=True, exist_ok=True)
+
+        conn = connect()
+        init_db(conn)
+        conn.close()
+
+    @app.get("/")
+    def index():
+        cfg = load_config()
+        history = _get_history()
         flashes = get_flashed_messages(with_categories=True)
         error = None
         message = None
@@ -428,10 +424,11 @@ def create_app():
             message=message,
             query="",
             top_k=1,
-            modality="image",
+            modality="auto",
+            search_kind="",
             dataset_path=cfg.dataset_path,
             history=history,
-            last_uploaded_filename=_last_uploaded_filename_from_history(history),
+            last_uploaded_filename=None,
             **_index_status(),
         )
 
@@ -442,7 +439,6 @@ def create_app():
         uploaded_paths = clear_search_history(conn)
         conn.close()
 
-        # Best-effort delete uploaded query images (only within data/uploads)
         paths = get_paths()
         uploads_root = (paths.data_dir / "uploads").resolve()
         deleted = 0
@@ -502,28 +498,23 @@ def create_app():
             return redirect(url_for("index"))
 
         try:
-            # Automatically convert Windows paths to WSL paths when running under WSL
             dataset_path = normalize_path(dataset_path)
-            
             p = Path(dataset_path).expanduser()
-            
+
             if not p.exists():
                 flash(f"Folder does not exist: {dataset_path}", "error")
                 return redirect(url_for("index"))
             if not p.is_dir():
                 flash(f"Path is not a directory: {dataset_path}", "error")
                 return redirect(url_for("index"))
-            
-            # Resolve after validation
+
             p = p.resolve()
         except Exception as e:
             flash(f"Invalid path: {dataset_path} - {str(e)}", "error")
             return redirect(url_for("index"))
 
-        # Save to config
         cfg.dataset_path = str(p)
         from .config import save_config
-
         save_config(cfg)
 
         if run_pipeline:
@@ -533,7 +524,6 @@ def create_app():
                 ingest_results = ingest_path(conn, p)
                 new_files = sum(1 for r in ingest_results if r.is_new)
                 existing_files = len(ingest_results) - new_files
-                # Extract for all docs (new ones + existing)
                 extracted = 0
                 for row in list_documents(conn):
                     if extract_text_for_doc(conn, row["doc_id"], Path(row["stored_path"]), row["media_type"]):
@@ -542,13 +532,11 @@ def create_app():
 
                 built = []
                 errors = []
-                # Build image index if configured
                 try:
                     _build_image_index(prefer_faiss=prefer_faiss)
                     built.append("image")
                 except Exception as e:
                     errors.append(f"Image index failed: {str(e)}")
-                # Build text index if possible
                 try:
                     _build_text_index(prefer_faiss=prefer_faiss)
                     built.append("text")
@@ -568,15 +556,13 @@ def create_app():
 
     @app.post("/search/text")
     def search_text_post():
-        """Handle form submission and redirect to GET to avoid resubmission warning."""
         query = (request.form.get("query") or "").strip()
         modality = (request.form.get("modality") or "auto").strip().lower()
-        top_k = int(request.form.get("top_k") or 5)
+        top_k = int(request.form.get("top_k") or 1)
 
         if not query:
             return redirect(url_for("index"))
 
-        # Save history
         conn = connect()
         add_search_history(
             conn,
@@ -588,128 +574,57 @@ def create_app():
         )
         conn.close()
 
-        # Redirect to GET endpoint (PRG pattern)
         return redirect(url_for("search_text_get", q=query, modality=modality, top_k=top_k))
 
     @app.get("/search/text")
     def search_text_get():
-        """Handle GET search - display results without form resubmission issues."""
         query = (request.args.get("q") or "").strip()
         modality = (request.args.get("modality") or "auto").strip().lower()
-        top_k = int(request.args.get("top_k") or 5)
+        top_k = int(request.args.get("top_k") or 1)
         prefer_faiss = True
 
-        history = _get_history()
-
         if not query:
-            cfg = load_config()
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
-                error=None,
-                message=None,
-                query="",
-                top_k=top_k,
-                modality=modality,
-                dataset_path=cfg.dataset_path,
-                history=history,
-                last_uploaded_filename=_last_uploaded_filename_from_history(history),
-                **_index_status(),
-            )
+            return _render(top_k=top_k, modality=modality, search_kind="text")
 
         try:
             if modality == "auto":
                 text_results, image_results = auto_query(query=query, top_k=top_k, prefer_faiss=prefer_faiss)
             else:
-                results = text_query(query=query, target_modality=modality, top_k=top_k, prefer_faiss=prefer_faiss)
-                text_results = results
+                text_results = text_query(query=query, target_modality=modality, top_k=top_k, prefer_faiss=prefer_faiss)
                 image_results = None
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             if modality == "text":
-                msg = (
-                    "Text index is missing. Run: fysearch build-index (text). "
-                    "If you're mostly indexing images, OCR/text extraction may be empty; use Images (text→image) instead, "
-                    "or set up OCR to generate searchable text."
-                )
+                msg = "Text index is missing. Build it from the sidebar or run: fysearch build-index --modality text"
             elif modality == "auto":
-                msg = "No indexes found. Run: fysearch build-index"
+                msg = "No indexes found. Build indexes from the sidebar."
             else:
-                msg = "Image index is missing. Run: fysearch build-index --modality image"
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
-                error=msg,
-                message=None,
-                query=query,
-                top_k=top_k,
-                modality=modality,
-                dataset_path=load_config().dataset_path,
-                history=history,
-                last_uploaded_filename=_last_uploaded_filename_from_history(history),
-                **_index_status(),
-            )
+                msg = "Image index is missing. Build it from the sidebar or run: fysearch build-index --modality image"
+            return _render(error=msg, query=query, top_k=top_k, modality=modality, search_kind="text")
         except Exception as e:
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
-                error=str(e),
-                message=None,
-                query=query,
-                top_k=top_k,
-                modality=modality,
-                dataset_path=load_config().dataset_path,
-                history=history,
-                last_uploaded_filename=_last_uploaded_filename_from_history(history),
-                **_index_status(),
-            )
+            return _render(error=str(e), query=query, top_k=top_k, modality=modality, search_kind="text")
 
-        return render_template(
-            "index.html",
-            text_results=text_results if text_results else None,
-            image_results=image_results if image_results else None,
-            error=None,
-            message=None,
+        return _render(
+            text_results=text_results,
+            image_results=image_results,
             query=query,
             top_k=top_k,
             modality=modality,
-            dataset_path=load_config().dataset_path,
-            history=history,
-            last_uploaded_filename=_last_uploaded_filename_from_history(history),
-            **_index_status(),
+            search_kind="text",
         )
 
     @app.post("/search/image")
     def search_image():
-        top_k = int(request.form.get("top_k") or 5)
+        top_k = int(request.form.get("top_k") or 1)
         prefer_faiss = True
 
         file = request.files.get("image")
         if file is None or file.filename == "":
-            cfg = load_config()
-            history = _get_history()
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
-                error="No image uploaded",
-                message=None,
-                query="",
-                top_k=top_k,
-                modality="image",
-                dataset_path=cfg.dataset_path,
-                history=history,
-                last_uploaded_filename=_last_uploaded_filename_from_history(history),
-                **_index_status(),
-            )
+            return _render(error="No image uploaded", top_k=top_k, modality="image", search_kind="image")
 
         paths = get_paths()
         upload_dir = paths.data_dir / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save to a temporary file under data/uploads to make embedding backends happy.
         suffix = Path(file.filename).suffix or ".img"
         with tempfile.NamedTemporaryFile(delete=False, dir=upload_dir, suffix=suffix) as tmp:
             file.save(tmp)
@@ -720,40 +635,22 @@ def create_app():
         try:
             results = image_query(image_path=tmp_path, top_k=top_k, prefer_faiss=prefer_faiss)
         except FileNotFoundError:
-            msg = "Image index is missing. Run: fysearch build-index --modality image"
-            history = _get_history()
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
-                error=msg,
-                message=None,
-                query="",
+            return _render(
+                error="Image index is missing. Build it from the sidebar.",
                 top_k=top_k,
                 modality="image",
-                dataset_path=load_config().dataset_path,
-                history=history,
+                search_kind="image",
                 last_uploaded_filename=uploaded_filename,
-                **_index_status(),
             )
         except Exception as e:
-            history = _get_history()
-            return render_template(
-                "index.html",
-                text_results=None,
-                image_results=None,
+            return _render(
                 error=str(e),
-                message=None,
-                query="",
                 top_k=top_k,
                 modality="image",
-                dataset_path=load_config().dataset_path,
-                history=history,
+                search_kind="image",
                 last_uploaded_filename=uploaded_filename,
-                **_index_status(),
             )
 
-        # Save history (store uploaded temp path; Clear will delete uploads)
         conn = connect()
         add_search_history(
             conn,
@@ -765,19 +662,12 @@ def create_app():
         )
         conn.close()
 
-        return render_template(
-            "index.html",
-            text_results=None,
+        return _render(
             image_results=results,
-            error=None,
-            message=None,
-            query="",
             top_k=top_k,
             modality="image",
-            dataset_path=load_config().dataset_path,
-            history=_get_history(),
+            search_kind="image",
             last_uploaded_filename=uploaded_filename,
-            **_index_status(),
         )
 
     @app.get("/doc/<doc_id>")
@@ -791,7 +681,7 @@ def create_app():
         conn.close()
         if not row:
             abort(404)
-        path = Path(row["stored_path"]) 
+        path = Path(row["stored_path"])
         if not path.exists():
             abort(404)
         return send_file(path)

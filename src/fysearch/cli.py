@@ -3,7 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -162,11 +162,12 @@ def extract() -> None:
             for row in docs
         ]
 
-        # Use ProcessPoolExecutor for parallel extraction (OCR is CPU heavy)
+        # Use ThreadPoolExecutor for extraction - saturate all 8 logical processors
+        # (OCR is I/O + CPU, threads avoid process overhead)
         cfg = load_config()
-        max_w = cfg.effective_max_workers
+        max_w = cfg.effective_max_workers  # Will be 8 on your system
 
-        with ProcessPoolExecutor(max_workers=max_w) as executor:
+        with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(_extract_worker, item) for item in work_items]
 
             for future in as_completed(futures):
@@ -247,7 +248,7 @@ def build_index(
                 valid_rows.append(r)
 
         # Batch processing — larger batches for better CPU utilization
-        batch_size = 64
+        batch_size = 256
 
         with Progress(
             SpinnerColumn(),
@@ -305,7 +306,7 @@ def build_index(
     vectors: list[np.ndarray] = []
 
     rows = list(rows)
-    batch_size = 32
+    batch_size = 128
 
     with Progress(
         SpinnerColumn(),

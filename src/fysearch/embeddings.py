@@ -7,24 +7,37 @@ from typing import Any, Optional, List
 import numpy as np
 
 
-def _configure_torch_threads() -> None:
-    """Configure PyTorch to use all available CPU cores for maximum throughput."""
+def _configure_cpu_parallelism() -> None:
+    """Configure ALL CPU parallelism knobs for maximum throughput on 4C/8T.
+
+    Sets env vars for OpenMP, MKL, OpenBLAS, and HuggingFace tokenizers
+    BEFORE any library reads them. Also configures PyTorch thread counts.
+    """
+    num_cores = os.cpu_count() or 8
+
+    # These env vars must be set before numpy/torch/ONNX import in workers,
+    # but since this module is imported early, we set them here.
+    os.environ.setdefault("OMP_NUM_THREADS", str(num_cores))
+    os.environ.setdefault("MKL_NUM_THREADS", str(num_cores))
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(num_cores))
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", str(num_cores))
+    os.environ.setdefault("NUMEXPR_MAX_THREADS", str(num_cores))
+    # Avoid deadlocks in forked workers when using HF tokenizers
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "true")
+
     try:
         import torch
-        num_cores = os.cpu_count() or 4
-        # Intra-op parallelism (within operations like matrix multiply)
         torch.set_num_threads(num_cores)
-        # Inter-op parallelism (across independent operations)
         try:
-            torch.set_num_interop_threads(max(1, num_cores // 2))
+            torch.set_num_interop_threads(num_cores)
         except RuntimeError:
             pass  # Can only be set once; ignore if already set
     except ImportError:
         pass
 
 
-# Configure threading on module load — this must happen before any model inference.
-_configure_torch_threads()
+# Configure on module load — must happen before any model inference.
+_configure_cpu_parallelism()
 
 
 def l2_normalize(v: np.ndarray) -> np.ndarray:
@@ -57,7 +70,7 @@ class TextEmbedder:
             vec = np.asarray(model.encode([text], normalize_embeddings=True)[0], dtype=np.float32)
         return vec
 
-    def embed_batch(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
+    def embed_batch(self, texts: List[str], batch_size: int = 256) -> np.ndarray:
         """Embed multiple texts efficiently in batches. Returns array of shape (len(texts), dim)."""
         model = self._get_model()
         try:
@@ -107,12 +120,20 @@ class ImageEmbedder:
             vec = np.asarray(model.encode([img], normalize_embeddings=True)[0], dtype=np.float32)
         return vec
 
-    def embed_batch(self, image_paths: List[str], batch_size: int = 32) -> np.ndarray:
+    def embed_batch(self, image_paths: List[str], batch_size: int = 128) -> np.ndarray:
         """Embed multiple images efficiently in batches. Returns array of shape (len(images), dim)."""
         from PIL import Image
+        from concurrent.futures import ThreadPoolExecutor
 
         model = self._get_model()
-        images = [Image.open(p).convert("RGB") for p in image_paths]
+        
+        # Parallel image loading - use ALL logical processors for I/O
+        num_loaders = min(os.cpu_count() or 8, len(image_paths))
+        def load_image(path: str) -> Image.Image:
+            return Image.open(path).convert("RGB")
+        
+        with ThreadPoolExecutor(max_workers=num_loaders) as executor:
+            images = list(executor.map(load_image, image_paths))
         try:
             import torch
             with torch.inference_mode():

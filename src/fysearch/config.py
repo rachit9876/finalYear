@@ -28,6 +28,7 @@ class Config:
 
     # Maximum number of parallel workers for CPU-intensive tasks.
     # 0 = auto-detect from os.cpu_count() (recommended).
+    # Set higher for better CPU utilization (e.g., cpu_count * 2 for I/O-bound tasks)
     max_workers: int = 0
 
     @property
@@ -35,7 +36,10 @@ class Config:
         """Resolved worker count: if 0, auto-detect from CPU count."""
         if self.max_workers > 0:
             return self.max_workers
-        return os.cpu_count() or 4
+        cpu_count = os.cpu_count() or 4
+        # Use all logical processors (hyperthreading) for maximum throughput
+        # For 4 cores / 8 threads, this returns 8
+        return cpu_count
 
 
 def load_config() -> Config:
