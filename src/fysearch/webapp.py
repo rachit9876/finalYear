@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import shutil
 
@@ -28,6 +29,66 @@ class ResultRow:
     method: str
     snippet: str
     page: str
+
+
+_RUNTIME_CACHE_LOCK = threading.RLock()
+_TEXT_EMBEDDER_CACHE: dict[str, Any] = {}
+_IMAGE_EMBEDDER_CACHE: dict[str, Any] = {}
+_INDEX_CACHE: dict[tuple[str, bool], dict[str, Any]] = {}
+
+
+def _index_path_for_modality(modality: str) -> Path:
+    paths = get_paths()
+    name = "text_index.npz" if modality == "text" else "image_index.npz"
+    return paths.index_dir / name
+
+
+def _index_file_stamp(npz: Path) -> tuple[int, int]:
+    st = npz.stat()
+    return (int(st.st_mtime_ns), int(st.st_size))
+
+
+def _clear_runtime_caches() -> None:
+    with _RUNTIME_CACHE_LOCK:
+        _TEXT_EMBEDDER_CACHE.clear()
+        _IMAGE_EMBEDDER_CACHE.clear()
+        _INDEX_CACHE.clear()
+
+
+def _get_cached_text_embedder(model_name_or_path: str):
+    if not model_name_or_path:
+        raise RuntimeError("Config.text_model is empty")
+
+    with _RUNTIME_CACHE_LOCK:
+        cached = _TEXT_EMBEDDER_CACHE.get(model_name_or_path)
+    if cached is not None:
+        return cached
+
+    embedder = maybe_text_embedder(model_name_or_path)
+    if embedder is None:
+        raise RuntimeError("Config.text_model is empty")
+
+    with _RUNTIME_CACHE_LOCK:
+        _TEXT_EMBEDDER_CACHE[model_name_or_path] = embedder
+    return embedder
+
+
+def _get_cached_image_embedder(model_name_or_path: str):
+    if not model_name_or_path:
+        raise RuntimeError("Config.image_model is empty")
+
+    with _RUNTIME_CACHE_LOCK:
+        cached = _IMAGE_EMBEDDER_CACHE.get(model_name_or_path)
+    if cached is not None:
+        return cached
+
+    embedder = maybe_image_embedder(model_name_or_path)
+    if embedder is None:
+        raise RuntimeError("Config.image_model is empty")
+
+    with _RUNTIME_CACHE_LOCK:
+        _IMAGE_EMBEDDER_CACHE[model_name_or_path] = embedder
+    return embedder
 
 
 def _page_from_original_path(original_path: str) -> str:
@@ -77,23 +138,39 @@ def _get_index(dim: int, prefer_faiss: bool):
     return BruteForceIndex(dim)
 
 
-def _load_npz(modality: str) -> tuple[list[str], np.ndarray]:
-    paths = get_paths()
-    name = "text_index.npz" if modality == "text" else "image_index.npz"
-    npz = paths.index_dir / name
+def _get_cached_index(modality: str, prefer_faiss: bool):
+    npz = _index_path_for_modality(modality)
     if not npz.exists():
         raise FileNotFoundError(f"Missing index: {npz}")
+
+    stamp = _index_file_stamp(npz)
+    key = (modality, prefer_faiss)
+
+    with _RUNTIME_CACHE_LOCK:
+        cached = _INDEX_CACHE.get(key)
+        if cached is not None and cached.get("stamp") == stamp:
+            return (cached["doc_ids"], cached["index"])
+
     data = np.load(npz, allow_pickle=True)
     doc_ids = [str(x) for x in data["doc_ids"]]
     vectors = data["vectors"].astype(np.float32)
-    return doc_ids, vectors
+
+    dim = vectors.shape[1]
+    idx = _get_index(dim=dim, prefer_faiss=prefer_faiss)
+    idx.add(doc_ids, vectors)
+
+    with _RUNTIME_CACHE_LOCK:
+        _INDEX_CACHE[key] = {
+            "stamp": stamp,
+            "doc_ids": doc_ids,
+            "index": idx,
+        }
+    return (doc_ids, idx)
 
 
 def _build_text_index(prefer_faiss: bool) -> Path:
     cfg = load_config()
-    embedder = maybe_text_embedder(cfg.text_model)
-    if embedder is None:
-        raise RuntimeError("Config.text_model is empty")
+    embedder = _get_cached_text_embedder(cfg.text_model)
 
     conn = connect()
     init_db(conn)
@@ -141,9 +218,7 @@ def _build_text_index(prefer_faiss: bool) -> Path:
 
 def _build_image_index(prefer_faiss: bool) -> Path:
     cfg = load_config()
-    embedder = maybe_image_embedder(cfg.image_model)
-    if embedder is None:
-        raise RuntimeError("Config.image_model is empty")
+    embedder = _get_cached_image_embedder(cfg.image_model)
 
     conn = connect()
     init_db(conn)
@@ -172,18 +247,29 @@ def _build_image_index(prefer_faiss: bool) -> Path:
 
 def text_query(query: str, target_modality: str, top_k: int, prefer_faiss: bool) -> list[ResultRow]:
     cfg = load_config()
-    text_embedder = maybe_text_embedder(cfg.text_model)
-    if text_embedder is None:
-        raise RuntimeError("Config.text_model is empty")
-
-    doc_ids, vectors = _load_npz(target_modality)
-    dim = vectors.shape[1]
-
-    idx = _get_index(dim=dim, prefer_faiss=prefer_faiss)
-    idx.add(doc_ids, vectors)
+    text_embedder = _get_cached_text_embedder(cfg.text_model)
 
     q = text_embedder.embed(query).astype(np.float32)
-    hits = idx.search(q, top_k)
+    return _text_query_from_vector(
+        query=query,
+        query_vec=q,
+        target_modality=target_modality,
+        top_k=top_k,
+        prefer_faiss=prefer_faiss,
+    )
+
+
+def _text_query_from_vector(
+    *,
+    query: str,
+    query_vec: np.ndarray,
+    target_modality: str,
+    top_k: int,
+    prefer_faiss: bool,
+) -> list[ResultRow]:
+    _, idx = _get_cached_index(target_modality, prefer_faiss=prefer_faiss)
+
+    hits = idx.search(query_vec, top_k)
 
     conn = connect()
     init_db(conn)
@@ -222,16 +308,32 @@ def text_query(query: str, target_modality: str, top_k: int, prefer_faiss: bool)
 
 def auto_query(query: str, top_k: int, prefer_faiss: bool) -> tuple[list[ResultRow], list[ResultRow]]:
     """Smart auto search: returns separate text and image results."""
+    cfg = load_config()
+    text_embedder = _get_cached_text_embedder(cfg.text_model)
+    query_vec = text_embedder.embed(query).astype(np.float32)
+
     text_results: list[ResultRow] = []
     image_results: list[ResultRow] = []
 
     try:
-        text_results = text_query(query=query, target_modality="text", top_k=top_k, prefer_faiss=prefer_faiss)
+        text_results = _text_query_from_vector(
+            query=query,
+            query_vec=query_vec,
+            target_modality="text",
+            top_k=top_k,
+            prefer_faiss=prefer_faiss,
+        )
     except (FileNotFoundError, RuntimeError):
         pass
 
     try:
-        image_results = text_query(query=query, target_modality="image", top_k=top_k, prefer_faiss=prefer_faiss)
+        image_results = _text_query_from_vector(
+            query=query,
+            query_vec=query_vec,
+            target_modality="image",
+            top_k=top_k,
+            prefer_faiss=prefer_faiss,
+        )
     except (FileNotFoundError, RuntimeError):
         pass
 
@@ -240,15 +342,9 @@ def auto_query(query: str, top_k: int, prefer_faiss: bool) -> tuple[list[ResultR
 
 def image_query(image_path: Path, top_k: int, prefer_faiss: bool) -> list[ResultRow]:
     cfg = load_config()
-    image_embedder = maybe_image_embedder(cfg.image_model)
-    if image_embedder is None:
-        raise RuntimeError("Config.image_model is empty")
+    image_embedder = _get_cached_image_embedder(cfg.image_model)
 
-    doc_ids, vectors = _load_npz("image")
-    dim = vectors.shape[1]
-
-    idx = _get_index(dim=dim, prefer_faiss=prefer_faiss)
-    idx.add(doc_ids, vectors)
+    _, idx = _get_cached_index("image", prefer_faiss=prefer_faiss)
 
     q = image_embedder.embed(str(image_path)).astype(np.float32)
     hits = idx.search(q, top_k)
@@ -403,6 +499,7 @@ def create_app():
         conn = connect()
         init_db(conn)
         conn.close()
+        _clear_runtime_caches()
 
     @app.get("/")
     def index():
@@ -477,9 +574,11 @@ def create_app():
         try:
             if modality == "image":
                 _build_image_index(prefer_faiss=prefer_faiss)
+                _clear_runtime_caches()
                 flash("Image index built successfully!", "success")
             else:
                 _build_text_index(prefer_faiss=prefer_faiss)
+                _clear_runtime_caches()
                 flash("Text index built successfully!", "success")
         except Exception as e:
             flash(f"Failed to build {modality} index: {str(e)}", "error")
@@ -542,6 +641,9 @@ def create_app():
                     built.append("text")
                 except Exception as e:
                     errors.append(f"Text index failed: {str(e)}")
+
+                if built:
+                    _clear_runtime_caches()
 
                 msg = f"Scanned {len(ingest_results)} files ({new_files} new, {existing_files} already indexed), extracted {extracted} docs, built: {', '.join(built) or 'none'}"
                 if errors:
